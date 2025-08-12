@@ -1,57 +1,87 @@
 """Enhanced LLM Handler with robust JSON extraction and network resilience."""
 
+from contextlib import contextmanager
+from datetime import datetime, timedelta
+from functools import wraps
+import hashlib
 import json
 import logging
 import os
+import random
 import re
 import sys
 import time
-import warnings
-from functools import wraps
 from typing import Any, Dict, List, Optional
-import hashlib
-from datetime import datetime, timedelta
+
+# Suppress FutureWarnings and add time budget helpers
+import warnings
 
 import ollama
 
-# Suppress FutureWarnings and add time budget helpers
-import warnings, time, random
-from contextlib import contextmanager
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 # Import niche normalization and seed topics from config
-from config import (
-    NICHE_ALIASES, normalize_niche, TIER1_GEOS, TIER2_GEOS, 
-    DEFAULT_TIMEFRAMES, MAX_TOPICS, SEED_TOPICS
-)
+from config import normalize_niche, settings
+
+
+# Pydantic models for topic scoring
+try:
+    from pydantic import BaseModel, Field, validator
+
+    PYDANTIC_AVAILABLE = True
+except ImportError:
+    PYDANTIC_AVAILABLE = False
+    print("⚠️ Pydantic not available, using basic validation")
+
+if PYDANTIC_AVAILABLE:
+
+    class TopicScore(BaseModel):
+        topic: str = Field(..., description="Topic text")
+        score: float = Field(..., ge=0.0, le=1.0, description="Score from 0.0 to 1.0")
+
+        @validator("score")
+        def validate_score(cls, v):
+            return max(0.0, min(1.0, v))
+
+    class TopicCache(BaseModel):
+        niche: str = Field(..., description="Content niche")
+        topics: List[str] = Field(..., description="List of topics")
+        timestamp: float = Field(..., description="Unix timestamp")
+        selected_today: List[str] = Field(
+            default_factory=list, description="Topics selected today"
+        )
+        source: str = Field(default="mixed", description="Source: online/offline/seed")
+
 
 def niche_from_channel(channel_name: str) -> str:
     """
     Helper function to automatically resolve niche from channel name.
-    
+
     Args:
         channel_name: Channel name (e.g., "CKDrive", "cklegends", "CKIronWill")
-        
+
     Returns:
         Normalized niche string (e.g., "automotive", "history", "motivation")
-        
+
     Examples:
         >>> niche_from_channel("CKDrive")
         'automotive'
-        >>> niche_from_channel("cklegends") 
+        >>> niche_from_channel("cklegends")
         'history'
         >>> niche_from_channel("CKIronWill")
         'motivation'
-        
+
     Usage in pipeline:
         # Instead of manually specifying niche:
         # topics = handler.get_topics_resilient("automotive", timeframe="today 1-m")
-        
+
         # Use the helper for automatic resolution:
         niche = niche_from_channel(channel_name)  # "CKDrive" -> "automotive"
         topics = handler.get_topics_resilient(niche, timeframe="today 1-m", geo="US")
     """
     return normalize_niche(channel_name)
+
 
 @contextmanager
 def time_budget(seconds: float):
@@ -60,21 +90,26 @@ def time_budget(seconds: float):
     if (time.monotonic() - start) > seconds:
         raise TimeoutError(f"Time budget exceeded ({seconds}s)")
 
+
 # --- Daily Cache + 7-day Dedupe Helpers ---
 def _today_str():
     return datetime.utcnow().strftime("%Y-%m-%d")
+
 
 def _cache_dir():
     d = os.path.join("data", "cache", "topics")
     os.makedirs(d, exist_ok=True)
     return d
 
+
 def _cache_key(niche: str):
     base = f"{_today_str()}::{niche.strip().lower()}"
     return hashlib.md5(base.encode("utf-8")).hexdigest()[:10]
 
+
 def _cache_path(niche: str):
     return os.path.join(_cache_dir(), f"{_cache_key(niche)}.json")
+
 
 def _load_recent_topics(niche: str, days: int = 7) -> list[str]:
     """Collect topics from last <days> cache files for dedupe."""
@@ -90,7 +125,7 @@ def _load_recent_topics(niche: str, days: int = 7) -> list[str]:
             date_part = None
         fpath = os.path.join(root, fn)
         try:
-            with open(fpath, "r", encoding="utf-8") as f:
+            with open(fpath, encoding="utf-8") as f:
                 data = json.load(f)
             dt = datetime.utcfromtimestamp(data.get("ts", 0))
             if dt >= cutoff and data.get("niche") == niche.lower():
@@ -98,45 +133,63 @@ def _load_recent_topics(niche: str, days: int = 7) -> list[str]:
         except Exception:
             continue
     # dedupe recent
-    seen=set(); out=[]
+    seen = set()
+    out = []
     for t in recent:
-        k=t.strip().lower()
+        k = t.strip().lower()
         if k and k not in seen:
-            seen.add(k); out.append(t.strip())
+            seen.add(k)
+            out.append(t.strip())
     return out
 
+
 def _save_topics_cache(niche: str, topics: list[str]):
-    payload = {"ts": int(time.time()), "date": _today_str(), "niche": niche.lower(), "topics": topics}
+    payload = {
+        "ts": int(time.time()),
+        "date": _today_str(),
+        "niche": niche.lower(),
+        "topics": topics,
+    }
     with open(_cache_path(niche), "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
+
 
 # --- Augment Cache Helpers ---
 def _day_salt(niche: str) -> str:
     base = f"{_today_str()}::{niche.strip().lower()}"
     return hashlib.md5(base.encode("utf-8")).hexdigest()[:6]
 
+
 def _augment_cache_dir():
     d = os.path.join("data", "cache", "augment")
     os.makedirs(d, exist_ok=True)
     return d
 
+
 def _augment_cache_path(niche: str):
     return os.path.join(_augment_cache_dir(), f"{_today_str()}_{niche.lower()}.json")
+
 
 def _load_augment_cache(niche: str) -> list[str]:
     p = _augment_cache_path(niche)
     if os.path.exists(p):
         try:
-            with open(p, "r", encoding="utf-8") as f:
+            with open(p, encoding="utf-8") as f:
                 return json.load(f).get("topics", [])
         except Exception:
             return []
     return []
 
+
 def _save_augment_cache(niche: str, topics: list[str]):
     try:
         with open(_augment_cache_path(niche), "w", encoding="utf-8") as f:
-            json.dump({"date": _today_str(), "niche": niche, "topics": topics}, f, ensure_ascii=False, indent=2)
+            json.dump(
+                {"date": _today_str(), "niche": niche, "topics": topics},
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
     except Exception:
         pass
 
@@ -170,7 +223,9 @@ def _get_trend_client():
             try:
                 if hasattr(client, "timeout"):
                     client.timeout = (5, 10)  # (connect, read) timeout
-                if hasattr(client, "requests_args") and isinstance(client.requests_args, dict):
+                if hasattr(client, "requests_args") and isinstance(
+                    client.requests_args, dict
+                ):
                     client.requests_args.update({"allow_redirects": True})
             except Exception:
                 pass  # Safe to ignore timeout config errors
@@ -484,8 +539,9 @@ class ImprovedLLMHandler:
         """
         # Import pandas and configure to suppress silent downcasting warnings
         import pandas as pd
-        pd.set_option('future.no_silent_downcasting', True)
-        
+
+        pd.set_option("future.no_silent_downcasting", True)
+
         if not self.pytrends:
             self.log_message(
                 "PyTrends not available - skipping trending topics", "WARNING"
@@ -534,21 +590,22 @@ class ImprovedLLMHandler:
                     if not trends_data.empty:
                         # Get top trending terms
                         if hasattr(self.pytrends, "trending_searches"):
-                            top_terms = self.pytrends.trending_searches(pn="united_states")
+                            top_terms = self.pytrends.trending_searches(
+                                pn="united_states"
+                            )
                             if not top_terms.empty:
                                 trending_topics.extend(top_terms[0].head(5).tolist())
                 elif hasattr(self.pytrends, "get_trending_topics"):
                     # Offline PyTrends
-                    offline_topics = self.pytrends.get_trending_topics(niche, max_results=10)
+                    offline_topics = self.pytrends.get_trending_topics(
+                        niche, max_results=10
+                    )
                     if offline_topics:
                         trending_topics.extend(offline_topics[:5])
 
             except Exception as e:
-                self.log_message(
-                    f"PyTrends query failed for '{query}': {e}", "WARNING"
-                )
+                self.log_message(f"PyTrends query failed for '{query}': {e}", "WARNING")
                 # Fast fail - don't continue with more queries
-                pass
 
             # Remove duplicates and return
             unique_topics = list(dict.fromkeys(trending_topics))
@@ -632,18 +689,20 @@ class ImprovedLLMHandler:
     #
     #     return topics
 
-    def get_topics_by_channel(self, channel_name: str, timeframe: str | None = None, geo: str | None = None) -> list[str]:
+    def get_topics_by_channel(
+        self, channel_name: str, timeframe: str | None = None, geo: str | None = None
+    ) -> list[str]:
         """
         Convenience method to get topics by channel name with automatic niche resolution.
-        
+
         Args:
             channel_name: Channel name (e.g., "CKDrive", "cklegends", "CKIronWill")
             timeframe: Time range for trends (e.g., "today 1-m", "now 7-d")
             geo: Geographic location (e.g., "US", "GB", "CA")
-            
+
         Returns:
             List of trending topics for the channel's niche
-            
+
         Examples:
             >>> handler = ImprovedLLMHandler()
             >>> topics = handler.get_topics_by_channel("CKDrive", geo="US")
@@ -652,136 +711,315 @@ class ImprovedLLMHandler:
         niche = niche_from_channel(channel_name)
         return self.get_topics_resilient(niche, timeframe, geo)
 
-    def get_topics_resilient(self, niche: str, timeframe: str | None = None, geo: str | None = None) -> list[str]:
-        """Get topics with resilient fallback: online → offline → seed"""
+    def get_topics_resilient(
+        self, niche: str, timeframe: str | None = None, geo: str | None = None
+    ) -> list[str]:
+        """
+        Get topics with resilient fallback: online (pytrends) → offline (pytrends_offline) → seed list
+        Guarantees 24 topics with 7-day dedupe and daily augmentation
+        """
         # Niche normalization
         niche = normalize_niche(niche)
 
+        # Check today's cache first
+        today_cache = self._load_today_cache(niche)
+        if today_cache and len(today_cache.get("topics", [])) >= 24:
+            self.log_message(
+                f"Using today's cached topics for {niche}: {len(today_cache['topics'])} topics",
+                "INFO",
+            )
+            return today_cache["topics"][:24]
+
         topics: list[str] = []
+        source = "unknown"
         online_warned = False
 
-        # ---- ONLINE (tek atış, 6sn time budget) ----
-        geos_to_try = [geo] if geo else (TIER1_GEOS + TIER2_GEOS)
-        frames_to_try = [timeframe] if timeframe else DEFAULT_TIMEFRAMES
+        # ---- ONLINE (pytrends) ----
         try:
             with time_budget(6.0):
-                for g in geos_to_try:
-                    for tf in frames_to_try:
-                        try:
-                            # Direct PyTrends call without going through old function
-                            if hasattr(self.pytrends, "build_payload"):
-                                self.pytrends.build_payload([niche], timeframe=tf, geo=g, gprop="")
-                                trends_data = self.pytrends.interest_over_time()
-                                if not trends_data.empty and hasattr(self.pytrends, "trending_searches"):
-                                    top_terms = self.pytrends.trending_searches(pn="united_states")
-                                    if not top_terms.empty:
-                                        topics = top_terms[0].head(5).tolist()
-                                        if topics:
-                                            self.log_message(f"PyTrends online OK: {len(topics)} topics (geo={g}, tf='{tf}')", "INFO")
-                                            raise StopIteration
-                        except Exception as e:
-                            if not online_warned:
-                                self.log_message(f"PyTrends online fail → fast fallback ({g}, {tf}): {e}", "WARNING")
-                                online_warned = True
-                            # ilk hata aldığımızda online'ı tamamen bırak
-                            raise StopIteration
-        except StopIteration:
-            pass
-        except TimeoutError as e:
-            if not online_warned:
-                self.log_message(f"PyTrends online timeout → fast fallback: {e}", "WARNING")
-            topics = []
+                topics = self._get_online_topics(niche, timeframe, geo)
+                if topics and len(topics) >= 8:
+                    source = "online"
+                    self.log_message(
+                        f"PyTrends online OK: {len(topics)} topics", "INFO"
+                    )
+                else:
+                    raise Exception("Insufficient online topics")
         except Exception as e:
             if not online_warned:
-                self.log_message(f"PyTrends online unexpected → fast fallback: {e}", "WARNING")
+                self.log_message(
+                    f"PyTrends online failed (404/429/timeout): {e}", "WARNING"
+                )
+                online_warned = True
             topics = []
 
-        # ---- OFFLINE ----
-        if not topics and hasattr(self, "pytrends") and hasattr(self.pytrends, "get_trending_topics"):
+        # ---- OFFLINE (pytrends_offline) ----
+        if not topics or len(topics) < 8:
             try:
-                topics = self.pytrends.get_trending_topics(niche, max_results=MAX_TOPICS)
-                if topics:
-                    self.log_message(f"Offline trends used: {len(topics)} topics", "INFO")
+                offline_topics = self._get_offline_topics(niche)
+                if offline_topics and len(offline_topics) >= 8:
+                    topics = offline_topics
+                    source = "offline"
+                    self.log_message(
+                        f"Offline trends used: {len(topics)} topics", "INFO"
+                    )
             except Exception as e:
                 self.log_message(f"Offline trends failed: {e}", "WARNING")
-                topics = []
 
-        # ---- SEED ----
-        if not topics:
-            topics = (SEED_TOPICS.get(niche.lower()) or SEED_TOPICS.get("history", []))[:MAX_TOPICS]
-            self.log_message(f"Using seed fallback for '{niche}': {len(topics)} topics", "WARNING")
+        # ---- SEED LIST (guaranteed fallback) ----
+        if not topics or len(topics) < 8:
+            seed_topics = self._get_seed_topics(niche)
+            topics = seed_topics
+            source = "seed"
+            self.log_message(
+                f"Using seed fallback for '{niche}': {len(topics)} topics", "WARNING"
+            )
 
-        # ---- DEDUPE + SHUFFLE + TRIM ----
+        # ---- ENSURE 24 TOPICS MINIMUM ----
+        if len(topics) < 24:
+            topics = self._ensure_minimum_topics(niche, topics, 24)
+
+        # ---- 7-DAY DEDUPE + AUGMENT ----
+        topics = self._apply_dedupe_and_augment(niche, topics)
+
+        # ---- CACHE WITH TODAY'S SELECTION TRACKING ----
+        self._save_today_cache(niche, topics, source)
+
+        self.log_message(
+            f"Final topics for {niche}: {len(topics)} (source: {source})", "INFO"
+        )
+        return topics[:24]  # Guarantee max 24 topics
+
+    def _get_online_topics(
+        self, niche: str, timeframe: str | None = None, geo: str | None = None
+    ) -> list[str]:
+        """Get topics from online PyTrends with error handling for 404/429"""
         try:
-            seen = set(); deduped=[]
-            for t in topics:
-                k = t.strip().lower()
-                if k and k not in seen:
-                    seen.add(k); deduped.append(t.strip())
-            random.shuffle(deduped)
-            topics = deduped[:MAX_TOPICS]
-        except Exception:
-            pass
+            geos_to_try = (
+                [geo]
+                if geo
+                else (
+                    getattr(settings, "TIER1_GEOS", ["US"])
+                    + getattr(settings, "TIER2_GEOS", ["GB", "CA"])
+                )
+            )
+            frames_to_try = (
+                [timeframe]
+                if timeframe
+                else getattr(settings, "DEFAULT_TIMEFRAMES", ["today 1-m", "now 7-d"])
+            )
 
-        # --- 7 günlük dedupe + augment + backfill policy ---
+            for g in geos_to_try:
+                for tf in frames_to_try:
+                    try:
+                        if hasattr(self, "pytrends") and hasattr(
+                            self.pytrends, "build_payload"
+                        ):
+                            self.pytrends.build_payload(
+                                [niche], timeframe=tf, geo=g, gprop=""
+                            )
+                            trends_data = self.pytrends.interest_over_time()
+                            if not trends_data.empty and hasattr(
+                                self.pytrends, "trending_searches"
+                            ):
+                                top_terms = self.pytrends.trending_searches(
+                                    pn="united_states"
+                                )
+                                if not top_terms.empty:
+                                    topics = top_terms[0].head(8).tolist()
+                                    if topics:
+                                        return topics
+                    except Exception as e:
+                        if "404" in str(e) or "429" in str(e):
+                            self.log_message(
+                                f"PyTrends rate limit/not found ({g}, {tf}): {e}",
+                                "WARNING",
+                            )
+                            continue
+                        else:
+                            self.log_message(
+                                f"PyTrends error ({g}, {tf}): {e}", "WARNING"
+                            )
+                            continue
+            return []
+        except Exception as e:
+            self.log_message(f"Online topics failed: {e}", "WARNING")
+            return []
+
+    def _get_offline_topics(self, niche: str) -> list[str]:
+        """Get topics from offline PyTrends fallback"""
         try:
+            if hasattr(self, "pytrends") and hasattr(
+                self.pytrends, "get_trending_topics"
+            ):
+                topics = self.pytrends.get_trending_topics(
+                    niche, max_results=getattr(settings, "MAX_TOPICS", 24)
+                )
+                if topics:
+                    return topics[:24]
+        except Exception as e:
+            self.log_message(f"Offline topics failed: {e}", "WARNING")
+        return []
+
+    def _get_seed_topics(self, niche: str) -> list[str]:
+        """Get guaranteed seed topics for niche"""
+        try:
+            seed_topics = getattr(settings, "SEED_TOPICS", {}).get(niche.lower(), [])
+            if not seed_topics:
+                seed_topics = getattr(settings, "SEED_TOPICS", {}).get("history", [])
+
+            # Ensure we have at least 24 topics
+            if len(seed_topics) < 24:
+                # Add generic topics
+                generic_topics = [
+                    "Ancient mysteries revealed",
+                    "Lost civilizations found",
+                    "Historical secrets exposed",
+                    "Forgotten stories uncovered",
+                    "Mysterious artifacts discovered",
+                    "Hidden truths revealed",
+                    "Ancient wisdom decoded",
+                    "Lost knowledge recovered",
+                    "Historical puzzles solved",
+                    "Mysterious events explained",
+                    "Ancient technology revealed",
+                    "Lost treasures found",
+                    "Historical controversies resolved",
+                    "Mysterious disappearances solved",
+                    "Ancient rituals explained",
+                    "Lost cities discovered",
+                    "Historical myths debunked",
+                    "Mysterious symbols decoded",
+                    "Ancient prophecies fulfilled",
+                    "Lost documents found",
+                    "Historical mysteries solved",
+                    "Mysterious phenomena explained",
+                    "Ancient legends proven",
+                    "Lost knowledge revealed",
+                ]
+                seed_topics.extend(generic_topics)
+
+            return seed_topics[:24]
+        except Exception as e:
+            self.log_message(f"Seed topics failed: {e}", "WARNING")
+            # Ultimate fallback
+            return [
+                f"{niche} mystery",
+                f"{niche} revealed",
+                f"{niche} secrets",
+                f"{niche} facts",
+            ] * 6
+
+    def _ensure_minimum_topics(
+        self, niche: str, topics: list[str], minimum: int
+    ) -> list[str]:
+        """Ensure minimum number of topics by augmenting if needed"""
+        if len(topics) >= minimum:
+            return topics
+
+        # Augment with variations
+        augmented = self.augment_seed_topics(niche, topics, want=minimum - len(topics))
+        topics.extend(augmented)
+
+        # If still not enough, add generic topics
+        if len(topics) < minimum:
+            generic = [f"{niche} {i}" for i in range(1, minimum - len(topics) + 1)]
+            topics.extend(generic)
+
+        return topics[:minimum]
+
+    def _apply_dedupe_and_augment(self, niche: str, topics: list[str]) -> list[str]:
+        """Apply 7-day dedupe and augmentation"""
+        try:
+            # Load recent topics for dedupe
             previous = _load_recent_topics(niche, days=7)
             prevset = {p.strip().lower() for p in previous} if previous else set()
 
-            # 1) önce seed/online/offline'dan gelen listeyi dedupe et
-            base = topics[:]  # 24 civarı
-            novel = [t for t in base if t.strip().lower() not in prevset]
+            # Dedupe current topics
+            seen = set()
+            deduped = []
+            for t in topics:
+                k = t.strip().lower()
+                if k and k not in seen and k not in prevset:
+                    seen.add(k)
+                    deduped.append(t.strip())
 
-            # 2) yeterince yeni yoksa (örn. 0), günlük augment ile yeni varyant üret
-            MIN_NEW, MAX_OUT = 12, MAX_TOPICS
-            if len(novel) < MIN_NEW:
-                aug = self.augment_seed_topics(niche, base, want=16)
-                # augment'leri de 7g'e karşı dedupe et
-                aug_novel = [t for t in aug if t.strip().lower() not in prevset]
-                novel.extend([t for t in aug_novel if t.strip().lower() not in {x.strip().lower() for x in novel}])
-
-            # 3) final listeyi oluştur (önce novel, sonra backfill)
-            final = novel[:MAX_OUT]
-
-            # eksikse backfill: önce base içinden, sonra previous içinden
-            if len(final) < MAX_OUT:
-                pool = [t for t in base if t not in final] + [t for t in previous if t not in final]
-                random.shuffle(pool)
-                seen = {x.strip().lower() for x in final}
-                for t in pool:
-                    if len(final) >= MAX_OUT: break
+            # If not enough novel topics, augment
+            if len(deduped) < 12:
+                augmented = self.augment_seed_topics(niche, topics, want=16)
+                for t in augmented:
                     k = t.strip().lower()
-                    if k and k not in seen:
-                        seen.add(k); final.append(t)
+                    if k and k not in seen and k not in prevset:
+                        seen.add(k)
+                        deduped.append(t.strip())
 
-            new_count = len([t for t in final if t.strip().lower() not in prevset])
-            if new_count < MIN_NEW:
-                self.logger.warning(f"Dedupe+augment produced {new_count} new topics; backfilled to {len(final)}.")
+            # Shuffle and return
+            random.shuffle(deduped)
+            return deduped[:24]
 
-            topics = final
         except Exception as e:
-            self.logger.warning(f"Dedupe/augment step failed: {e}")
-            # topics olduğu gibi kalsın
-        
-        # --- cache yaz ---
+            self.log_message(f"Dedupe/augment failed: {e}", "WARNING")
+            return topics[:24]
+
+    def _load_today_cache(self, niche: str) -> dict | None:
+        """Load today's topic cache"""
         try:
-            _save_topics_cache(niche, topics)
-            self.logger.info(f"Cached {len(topics)} topics for {niche} (7d dedupe + augment + backfill applied)")
+            cache_path = _cache_path(niche)
+            if os.path.exists(cache_path):
+                with open(cache_path, encoding="utf-8") as f:
+                    data = json.load(f)
+                    # Check if it's from today
+                    if data.get("date") == _today_str():
+                        return data
         except Exception as e:
-            self.logger.warning(f"Topic cache write failed: {e}")
-        return topics
+            self.log_message(f"Cache load failed: {e}", "WARNING")
+        return None
 
-    def score_topics_with_llm(self, niche: str, topics: list[str], top_k: int = 8) -> list[tuple[str, float]]:
+    def _save_today_cache(self, niche: str, topics: list[str], source: str):
+        """Save today's topic cache with selection tracking"""
+        try:
+            cache_data = {
+                "niche": niche,
+                "date": _today_str(),
+                "timestamp": time.time(),
+                "topics": topics,
+                "source": source,
+                "selected_today": [],  # Will be populated when topics are selected
+                "count": len(topics),
+            }
+
+            if PYDANTIC_AVAILABLE:
+                # Validate with pydantic
+                validated = TopicCache(**cache_data)
+                cache_data = validated.dict()
+
+            cache_path = _cache_path(niche)
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(cache_data, f, indent=2, ensure_ascii=False)
+
+            self.log_message(
+                f"Cached {len(topics)} topics for {niche} (source: {source})", "INFO"
+            )
+
+        except Exception as e:
+            self.log_message(f"Cache save failed: {e}", "WARNING")
+
+    def score_topics_with_llm(
+        self, niche: str, topics: list[str], top_k: int = 8
+    ) -> list[tuple[str, float]]:
         """
         Returns list of (topic, score) sorted desc by score. Falls back to simple heuristics.
         """
         if not topics:
             return []
         prompt = (
-            "You are a YouTube growth strategist. Score each topic from 0.0 to 1.0 for potential CTR and retention. "
-            "Consider curiosity gap, timeliness, evergreen appeal for the niche.\n"
+            "You are a YouTube growth strategist. Score each topic from 0.0 to 1.0 based on:\n"
+            "1. CTR potential (click-through rate)\n"
+            "2. Curiosity gap (mystery, intrigue)\n"
+            "3. Evergreen appeal (timeless relevance)\n"
+            "4. Niche alignment\n\n"
             f"Niche: {niche}\n"
-            "Return JSON array of objects: [{\"topic\": str, \"score\": float}]\n"
+            'Return ONLY a JSON array: [{"topic": "text", "score": 0.85}]\n'
             f"Topics: {topics[:24]}"
         )
         scored = []
@@ -789,7 +1027,7 @@ class ImprovedLLMHandler:
             # Use your existing LLM call helper if you have one; else a minimal call:
             resp = self._get_ollama_response(prompt)  # your safe JSON extractor
             for item in resp:
-                t = str(item.get("topic","")).strip()
+                t = str(item.get("topic", "")).strip()
                 s = float(item.get("score", 0))
                 if t:
                     scored.append((t, max(0.0, min(1.0, s))))
@@ -797,16 +1035,83 @@ class ImprovedLLMHandler:
             # Heuristic fallback: prefer shorter, high-curiosity tokens
             def heuristic(t):
                 base = 0.5
-                if any(k in t.lower() for k in ["mystery","unknown","secret","revealed","ancient","lost","why","how"]):
+                if any(
+                    k in t.lower()
+                    for k in [
+                        "mystery",
+                        "unknown",
+                        "secret",
+                        "revealed",
+                        "ancient",
+                        "lost",
+                        "why",
+                        "how",
+                    ]
+                ):
                     base += 0.2
                 base += max(0, (40 - len(t))) / 100.0  # shorter titles slightly higher
                 return min(1.0, base)
+
             scored = [(t, heuristic(t)) for t in topics]
 
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[:top_k]
 
-    def augment_seed_topics(self, niche: str, topics: list[str], want: int = 16) -> list[str]:
+    def _heuristic_scoring(
+        self, topics: list[str], count: int
+    ) -> list[tuple[str, float]]:
+        """Heuristic scoring fallback for topics"""
+        scored = []
+
+        for topic in topics:
+            if len(scored) >= count:
+                break
+
+            base_score = 0.5
+
+            # Boost for curiosity keywords
+            curiosity_keywords = [
+                "mystery",
+                "unknown",
+                "secret",
+                "revealed",
+                "ancient",
+                "lost",
+                "why",
+                "how",
+                "hidden",
+                "forgotten",
+                "discovered",
+                "uncovered",
+            ]
+            if any(keyword in topic.lower() for keyword in curiosity_keywords):
+                base_score += 0.2
+
+            # Boost for shorter titles (better CTR)
+            if len(topic) <= 40:
+                base_score += 0.1
+
+            # Boost for action words
+            action_words = [
+                "revealed",
+                "exposed",
+                "discovered",
+                "found",
+                "solved",
+                "explained",
+            ]
+            if any(word in topic.lower() for word in action_words):
+                base_score += 0.1
+
+            # Ensure score is within bounds
+            final_score = max(0.0, min(1.0, base_score))
+            scored.append((topic, final_score))
+
+        return scored
+
+    def augment_seed_topics(
+        self, niche: str, topics: list[str], want: int = 16
+    ) -> list[str]:
         """Parafraz + varyant üretir. LLM yoksa heuristikle üretir. Günlük cache vardır."""
         cached = _load_augment_cache(niche)
         if cached:
@@ -828,9 +1133,19 @@ class ImprovedLLMHandler:
             variants = []
 
         # Heuristik fallback (güvenli ve hızlı)
-        if not variants or len(variants) < max(8, want//2):
-            suffixes = ["explained", "revealed", "in 5 minutes", "you should know", "that changed history",
-                        "the untold story", "debunked", "guide", "timeline", "top facts"]
+        if not variants or len(variants) < max(8, want // 2):
+            suffixes = [
+                "explained",
+                "revealed",
+                "in 5 minutes",
+                "you should know",
+                "that changed history",
+                "the untold story",
+                "debunked",
+                "guide",
+                "timeline",
+                "top facts",
+            ]
             out = []
             for t in topics:
                 s = random.choice(suffixes)
@@ -840,11 +1155,13 @@ class ImprovedLLMHandler:
             variants = variants or out
 
         # dedupe + trim
-        seen=set(); uniq=[]
+        seen = set()
+        uniq = []
         for v in variants:
-            k=v.lower().strip()
+            k = v.lower().strip()
             if k and k not in seen:
-                seen.add(k); uniq.append(v.strip())
+                seen.add(k)
+                uniq.append(v.strip())
         uniq = uniq[:want]
 
         _save_augment_cache(niche, uniq)
@@ -961,16 +1278,18 @@ class ImprovedLLMHandler:
         try:
             # Use the helper function for automatic niche resolution
             niche = niche_from_channel(channel_name)
-            
+
             # Get trending topics with resilient fallback system
             trending_topics = self.get_topics_resilient(niche=niche)
-            self.log_message(f"Selected topics for '{niche}': {len(trending_topics)}", "INFO")
-            
+            self.log_message(
+                f"Selected topics for '{niche}': {len(trending_topics)}", "INFO"
+            )
+
             # Score and select top 8 topics
             topics_scored = self.score_topics_with_llm(niche, trending_topics, top_k=8)
-            best_topics = [t for t,_ in topics_scored]
+            best_topics = [t for t, _ in topics_scored]
             self.logger.info(f"Selected top {len(best_topics)} topics: {best_topics}")
-            
+
             trending_context = ""
             if best_topics:
                 trending_context = f"Current trending topics in this niche: {', '.join(best_topics[:5])}. "
@@ -1039,11 +1358,12 @@ Make each idea highly specific and researchable. Focus on creating genuine curio
             # Use the helper function for automatic niche resolution
             niche = niche_from_channel(channel_name)
 
-            prompt = f"""You are a master scriptwriter for viral YouTube documentaries. Write a highly detailed, long-form script for a 15-20 minute video on: '{video_idea.get('title', 'N/A')}'.
+            prompt = f"""You are a master scriptwriter for viral YouTube documentaries. Write a highly detailed, long-form script for a 15-20 minute video on: '{video_idea.get('title', 'N/A')}' using the "Hook → Promise → Proof → Preview" template.
 
 CRITICAL REQUIREMENTS:
-- Generate EXACTLY 60-80 sentences (no less, no more)
-- Each sentence must be a complete, engaging thought
+- Generate EXACTLY 80-120 words total (no less, no more)
+- Follow the 4-part structure: Hook (20-30 words) → Promise (20-30 words) → Proof (20-30 words) → Preview (20-30 words)
+- Each part must be a complete, engaging thought
 - Include multiple cliffhangers and suspense elements
 - Create engagement hooks at specific time intervals
 - Optimize Pexels queries for cinematic, high-quality visuals
@@ -1053,42 +1373,78 @@ REQUIRED JSON FORMAT:
 {{
   "video_title": "{video_idea.get('title', 'N/A')}",
   "target_duration_minutes": 15-20,
-  "script": [
-    {{
-      "sentence": "First sentence with rich narration",
+  "word_count": 0,
+  "script_structure": {{
+    "hook": {{
+      "content": "Opening hook to grab attention (20-30 words)",
       "visual_query": "cinematic 4K [exact {niche} scene] with dramatic lighting",
       "timing_seconds": 0,
-      "engagement_hook": "Opening hook to grab attention"
+      "engagement_hook": "Shocking opening statement or question"
     }},
-    {{
-      "sentence": "Second sentence building suspense",
-      "visual_query": "cinematic 4K [exact {niche} scene] atmospheric mood",
+    "promise": {{
+      "content": "What viewers will learn/discover (20-30 words)",
+      "visual_query": "cinematic 4K [exact {niche} scene] building anticipation",
       "timing_seconds": 8,
-      "engagement_hook": "Building curiosity"
+      "engagement_hook": "Building curiosity and expectation"
+    }},
+    "proof": {{
+      "content": "Evidence and credibility building (20-30 words)",
+      "visual_query": "cinematic 4K [exact {niche} scene] authoritative mood",
+      "timing_seconds": 16,
+      "engagement_hook": "Establishing trust and expertise"
+    }},
+    "preview": {{
+      "content": "Teaser for what's coming next (20-30 words)",
+      "visual_query": "cinematic 4K [exact {niche} scene] mysterious atmosphere",
+      "timing_seconds": 24,
+      "engagement_hook": "Creating anticipation for next section"
     }}
-  ],
+  }},
   "metadata": {{
     "subtitle_languages": ["English", "Spanish", "French", "German"],
     "target_audience": "Global English-speaking viewers",
-    "engagement_strategy": "Multiple cliffhangers every 3-4 minutes",
+    "engagement_strategy": "Hook → Promise → Proof → Preview structure with cliffhangers",
     "visual_prevention": "Exact niche matching for '{niche}' to prevent irrelevant visuals"
   }}
 }}
 
-Focus on creating genuine suspense and curiosity. Each sentence should advance the story while maintaining viewer engagement. Use EXACT niche matching in visual queries."""
+Focus on creating genuine suspense and curiosity. Each section should advance the story while maintaining viewer engagement. Use EXACT niche matching in visual queries. Ensure total word count is exactly 80-120 words.
+
+CRITICAL: Return ONLY valid JSON. Do not include any explanatory text, markdown formatting, or additional content outside the JSON structure."""
 
             result = self._get_ollama_response(prompt)
-            if result and "script" in result:
-                sentence_count = len(result["script"])
+            if result and "script_structure" in result:
+                # Calculate total word count
+                total_words = 0
+                if "hook" in result["script_structure"]:
+                    total_words += len(
+                        result["script_structure"]["hook"]["content"].split()
+                    )
+                if "promise" in result["script_structure"]:
+                    total_words += len(
+                        result["script_structure"]["promise"]["content"].split()
+                    )
+                if "proof" in result["script_structure"]:
+                    total_words += len(
+                        result["script_structure"]["proof"]["content"].split()
+                    )
+                if "preview" in result["script_structure"]:
+                    total_words += len(
+                        result["script_structure"]["preview"]["content"].split()
+                    )
+
+                # Update word count in result
+                result["word_count"] = total_words
+
                 self.log_message(
-                    f"Generated script with {sentence_count} sentences for '{video_idea.get('title', 'N/A')}'",
+                    f"Generated script with {total_words} words using Hook→Promise→Proof→Preview structure for '{video_idea.get('title', 'N/A')}'",
                     "INFO",
                 )
 
-                # Validate sentence count
-                if sentence_count < 60:
+                # Validate word count
+                if total_words < 80 or total_words > 120:
                     self.log_message(
-                        f"Warning: Script has only {sentence_count} sentences (minimum 60 required)",
+                        f"Warning: Script has {total_words} words (target: 80-120 words)",
                         "WARNING",
                     )
 

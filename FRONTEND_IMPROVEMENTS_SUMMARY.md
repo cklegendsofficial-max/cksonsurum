@@ -8,7 +8,7 @@ Successfully implemented thread-safe UI updates using Queue and root.after to el
 ### 1. **Queue-Based Event System**
 - **`from queue import Queue`**: Proper Queue imports for thread-safe communication
 - **`LogQueue`**: Thread-safe log message queue
-- **`ProgressQueue`**: Thread-safe progress update queue  
+- **`ProgressQueue`**: Thread-safe progress update queue
 - **`UIEvents`**: Thread-safe UI event queue (messagebox, button states, etc.)
 
 ### 2. **UI Pump Mechanism**
@@ -52,19 +52,19 @@ def ui_pump(self):
             self.log_text.insert(tk.END, log_entry + '\n')
             self.log_text.see(tk.END)
             self.log_queue.task_done()
-        
+
         # Process progress updates
         while not self.progress_queue.empty():
             progress_event = self.progress_queue.get_nowait()
             self._handle_progress_event(progress_event)
             self.progress_queue.task_done()
-        
+
         # Process UI events
         while not self.ui_events.empty():
             ui_event = self.ui_events.get_nowait()
             self._handle_ui_event(ui_event)
             self.ui_events.task_done()
-            
+
     except Exception as e:
         print(f"UI pump error: {e}")
     finally:
@@ -77,7 +77,7 @@ def ui_pump(self):
 def _handle_progress_event(self, event: Dict[str, Any]):
     """Handle progress update events from queue"""
     event_type = event.get('type')
-    
+
     if event_type == 'channel_progress':
         # Update channel progress bars
         self._update_channel_progress_safe(...)
@@ -91,7 +91,7 @@ def _handle_progress_event(self, event: Dict[str, Any]):
 def _handle_ui_event(self, event: Dict[str, Any]):
     """Handle general UI events from queue"""
     event_type = event.get('type')
-    
+
     if event_type == 'show_message':
         # Show messagebox dialogs
         messagebox.showerror(title, message)

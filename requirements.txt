@@ -7,17 +7,25 @@ numpy>=1.21.0  # For numerical operations and video analysis
 
 # Video processing
 moviepy>=1.0.3  # For video analysis and frame extraction
+imageio-ffmpeg>=0.4.8  # For robust ffmpeg integration and packaged binaries
 
 # AI/LLM integration
 ollama>=0.1.0  # For AI-powered script regeneration
+whisper>=1.0.0  # For speech-to-text transcription
+transformers>=4.30.0  # For MarianMT translation models
+torch>=2.0.0  # For PyTorch backend (transformers dependency)
+sentencepiece>=0.1.99  # For MarianMT tokenizer
 
 # Configuration and environment
 python-dotenv>=1.0.0  # For environment variable management
+pydantic>=2.0.0  # For configuration validation and settings management
+pydantic-settings>=2.0.0  # For BaseSettings functionality
 requests>=2.25.0  # For HTTP requests and API calls
 
 # Optional dependencies
 schedule>=1.1.0  # For automated scheduling
 pyautogui>=0.9.53  # For automation features
+rich>=13.0.0  # For rich console output and progress bars
 
 # Development dependencies
 PyInstaller>=5.0  # For building executables

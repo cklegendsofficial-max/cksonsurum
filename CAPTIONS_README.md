@@ -16,7 +16,7 @@ This system automatically generates captions in 15+ languages for your videos us
 ### Tier 1 (Primary)
 - **en** - English (source)
 - **es** - Spanish
-- **pt** - Portuguese  
+- **pt** - Portuguese
 - **fr** - French
 - **de** - German
 - **ja** - Japanese
@@ -95,7 +95,7 @@ from auto_captions import transcribe_to_srt, translate_srt
 en_srt = transcribe_to_srt("video.mp4")
 if en_srt:
     print(f"English SRT: {en_srt}")
-    
+
     # Step 2: Translate to Spanish
     es_srt = translate_srt(en_srt, "es")
     if es_srt:

@@ -1,0 +1,8 @@
+{"timestamp": "2025-08-12T14:04:58.035045", "step": "topics", "duration_ms": 150.5, "input_path": "input_trends.json", "output_path": "output_topics.json", "status": "success", "fallback": false, "channel": "TestChannel"}
+{"timestamp": "2025-08-12T14:04:58.137369", "step": "script", "duration_ms": 450.2, "input_path": "topics.json", "output_path": "script.json", "status": "success", "fallback": false, "channel": "TestChannel"}
+{"timestamp": "2025-08-12T14:04:58.240449", "step": "assets", "duration_ms": 1200.8, "input_path": "script.json", "output_path": "assets_folder", "status": "success", "fallback": false, "channel": "TestChannel"}
+{"timestamp": "2025-08-12T14:04:58.342085", "step": "render", "duration_ms": 5000.3, "input_path": "assets_folder", "output_path": "final_video.mp4", "status": "success", "fallback": false, "channel": "TestChannel"}
+{"timestamp": "2025-08-12T14:04:58.443953", "step": "captions", "duration_ms": 800.1, "input_path": "final_video.mp4", "output_path": "captions_folder", "status": "success", "fallback": false, "channel": "TestChannel"}
+{"timestamp": "2025-08-12T14:04:58.545700", "step": "score", "duration_ms": 75.6, "input_path": "final_video.mp4", "output_path": "quality_score.json", "status": "success", "fallback": false, "channel": "TestChannel"}
+{"timestamp": "2025-08-12T14:04:58.647155", "step": "error_test", "duration_ms": 25.0, "input_path": null, "output_path": null, "status": "error", "fallback": false, "channel": "TestChannel", "error": "Test error message"}
+{"timestamp": "2025-08-12T14:04:58.648643", "step": "fallback_test", "duration_ms": 100.0, "input_path": null, "output_path": null, "status": "success", "fallback": true, "channel": "TestChannel"}

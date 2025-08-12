@@ -1,15 +1,16 @@
 """Enhanced LLM Handler with robust JSON extraction and network resilience."""
 
+from functools import wraps
 import json
 import logging
 import os
 import re
 import sys
 import time
-from functools import wraps
 from typing import Any, Dict, List, Optional
 
 import ollama
+
 
 try:
     from pytrends.request import TrendReq
@@ -25,7 +26,10 @@ except Exception:
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
-    from config import AI_CONFIG, CHANNELS_CONFIG
+    from config import settings
+
+    CHANNELS_CONFIG = settings.CHANNELS_CONFIG
+    AI_CONFIG = {"ollama_model": settings.OLLAMA_MODEL}
 except ImportError:
     print("❌ No configuration file found - using minimal defaults")
     CHANNELS_CONFIG = {}
@@ -390,12 +394,18 @@ class ImprovedLLMHandler:
                         if not trends_data.empty:
                             # Get top trending terms
                             if hasattr(self.pytrends, "trending_searches"):
-                                top_terms = self.pytrends.trending_searches(pn="united_states")
+                                top_terms = self.pytrends.trending_searches(
+                                    pn="united_states"
+                                )
                                 if not top_terms.empty:
-                                    trending_topics.extend(top_terms[0].head(5).tolist())
+                                    trending_topics.extend(
+                                        top_terms[0].head(5).tolist()
+                                    )
                     elif hasattr(self.pytrends, "get_trending_topics"):
                         # Offline PyTrends
-                        offline_topics = self.pytrends.get_trending_topics(niche, max_results=10)
+                        offline_topics = self.pytrends.get_trending_topics(
+                            niche, max_results=10
+                        )
                         if offline_topics:
                             trending_topics.extend(offline_topics[:5])
 

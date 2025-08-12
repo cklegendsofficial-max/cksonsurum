@@ -1,0 +1,2 @@
+{"timestamp": "2025-08-12T14:03:40.745746", "step": "test_step", "duration_ms": 150.5, "input_path": null, "output_path": null, "status": "success", "fallback": false, "channel": null}
+{"timestamp": "2025-08-12T14:03:40.746493", "step": "error_step", "duration_ms": 75.2, "input_path": null, "output_path": null, "status": "error", "fallback": false, "channel": null, "error": "test error"}

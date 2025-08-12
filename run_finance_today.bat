@@ -1,10 +1,26 @@
 @echo off
 cd /d C:\Project_Chimera
-echo [1/3] Pipeline basliyor...
-python main.py --channel CKFinanceCore
-echo [2/3] Altyazi uretiliyor...
-python -c "from auto_captions import generate_multi_captions; print(generate_multi_captions(r'outputs\CKFinanceCore\2025-08-12\final_video.mp4'))"
-echo [3/3] Cikti listesi:
-powershell -NoLogo -NoProfile -Command "Get-ChildItem -Recurse -File 'outputs\CKFinanceCore\2025-08-12' | Select FullName,Length,LastWriteTime"
-echo Tamamlandi.
+echo ========================================
+echo    Enhanced Master Director Pipeline
+echo ========================================
+echo.
+echo [1/1] Tek komut ile tüm akış başlıyor...
+echo.
+python main.py --channel CKFinanceCore --steps all
+echo.
+echo ========================================
+echo    Pipeline tamamlandi!
+echo ========================================
+echo.
+echo Cikti dosyalari:
+echo - outputs\CKFinanceCore\YYYY-MM-DD\
+echo - final_video.mp4 (ana video)
+echo - captions\ (altyazılar)
+echo - shorts\ (kısa videolar)
+echo - report.md (rapor)
+echo - metrics.jsonl (metrikler)
+echo.
+echo Raporu görüntülemek için:
+echo notepad outputs\CKFinanceCore\YYYY-MM-DD\report.md
+echo.
 pause

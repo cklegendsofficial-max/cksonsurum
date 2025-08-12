@@ -79,6 +79,6 @@ def get_topics_resilient(niche, timeframe=None, geo=None) -> list[str]
 
 ---
 
-**Implementasyon Tarihi**: 12 Ağustos 2025  
-**Durum**: ✅ Tamamlandı ve Test Edildi  
+**Implementasyon Tarihi**: 12 Ağustos 2025
+**Durum**: ✅ Tamamlandı ve Test Edildi
 **Test Sonucu**: Tüm özellikler başarıyla çalışıyor

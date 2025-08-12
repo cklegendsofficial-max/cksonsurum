@@ -20,12 +20,32 @@
 - **Quality Metrics Display**: Shows comprehensive analysis results with recommendations
 - **Frame-by-Frame Analysis**: Navigate through video frames for detailed inspection
 
-## 🔧 Installation
+## 🚀 Sıfırdan Kur → Tek Komut
 
-1. Install required dependencies:
+### 🎯 Tek Komut ile Tüm Akış
 ```bash
-pip install -r requirements.txt
+# Sadece bu komutu yazın:
+python main.py --channel CKFinanceCore
+
+# Sistem otomatik olarak:
+# ✅ Topics üretir (24 konu + top 8 skorlu)
+# ✅ Video render eder (ffmpeg kontrolü ile)
+# ✅ Altyazı üretir (EN + 13 dil)
+# ✅ Shorts oluşturur (4 horizontal + 3 vertical)
+# ✅ Report.md oluşturur
+# ✅ Metrics.jsonl kaydeder
 ```
+
+### 🪟 Windows Hızlı Başlatma
+```batch
+# Batch dosyası ile:
+run_finance_today.bat
+
+# PowerShell ile:
+.\run_all_channels.ps1
+```
+
+## 🔧 Installation
 
 2. **Environment Setup** - Create environment configuration:
 ```bash
@@ -131,18 +151,18 @@ python frontend.py
 ### Example Code Style
 ```python
 def process_video(
-    video_path: str, 
+    video_path: str,
     quality: Optional[float] = None
 ) -> Dict[str, Any]:
     """Process video with quality enhancement.
-    
+
     Args:
         video_path: Path to the video file
         quality: Optional quality threshold (0.0-1.0)
-        
+
     Returns:
         Dictionary containing processing results
-        
+
     Raises:
         FileNotFoundError: If video file doesn't exist
         ValueError: If quality value is invalid
@@ -180,6 +200,9 @@ def process_video(
 
 ```
 Project_Chimera/
+├── main.py                  # Ana pipeline (tek komut ile çalışır)
+├── run_finance_today.bat    # Windows batch (CKFinanceCore)
+├── run_all_channels.ps1     # PowerShell (tüm kanallar)
 ├── frontend.py              # Enhanced GUI with new features
 ├── requirements.txt          # Dependencies list
 ├── README_ENHANCED.md       # This documentation
@@ -188,12 +211,73 @@ Project_Chimera/
 └── regenerated_scripts/     # AI-generated scripts (created automatically)
 ```
 
+## 📊 Pipeline Çıktıları
+
+### 🎬 Video Çıktıları
+```
+outputs/<channel>/<YYYY-MM-DD>/
+├── final_video.mp4          # Ana video (ffmpeg ile render)
+├── captions/                # Altyazı dosyaları
+│   ├── video.en.srt         # İngilizce (Whisper)
+│   ├── video.es.srt         # İspanyolca (MarianMT/Ollama)
+│   ├── video.tr.srt         # Türkçe
+│   └── ... (13 dil)
+└── shorts/                  # Kısa videolar
+    ├── short_1.mp4          # 15s horizontal
+    ├── short_2.mp4          # 30s horizontal
+    ├── vshort_1.mp4         # 15s vertical (9:16)
+    └── ... (7 short)
+```
+
+### 📈 Raporlar ve Metrikler
+```
+outputs/<channel>/<YYYY-MM-DD>/
+├── report.md                # Pipeline özet raporu
+├── metrics.jsonl            # Performans metrikleri
+└── logs/                    # Detaylı log dosyaları
+```
+
 ## 🚦 Usage Instructions
 
+### 🎯 Tek Komut ile Tam Pipeline
+```bash
+# Sadece bu komutu yazın:
+python main.py --channel CKFinanceCore
+
+# Sistem otomatik olarak tüm adımları tamamlar:
+# 1. Topics üretir (24 konu + top 8 skorlu)
+# 2. Video render eder (ffmpeg kontrolü ile)
+# 3. Altyazı üretir (EN + 13 dil çevirisi)
+# 4. Shorts oluşturur (4 horizontal + 3 vertical)
+# 5. Report.md oluşturur
+# 6. Metrics.jsonl kaydeder
+```
+
+### 🪟 Windows Hızlı Başlatma
+```batch
+# Tek kanal için:
+run_finance_today.bat
+
+# Tüm kanallar için:
+.\run_all_channels.ps1
+
+# Dry-run (test) için:
+.\run_all_channels.ps1 -DryRun
+```
+
+### 🔧 Detaylı Kontrol
+```bash
+# Sadece belirli adımlar:
+python main.py --channel CKFinanceCore --steps topics render
+
+# Belirli tarih için:
+python main.py --channel CKFinanceCore --date 2025-01-15
+
+# Dry-run (dosya yazmadan test):
+python main.py --channel CKFinanceCore --dry-run
+```
+
 ### Basic Video Analysis
-1. Click "🔍 Analyze Videos" to analyze all videos in the pipeline
-2. Check logs for quality scores and recommendations
-3. Use "🔄 Regenerate Low Quality" for AI-powered improvements
 
 ### Video Preview and Analysis
 1. Click "🎬 Video Preview" to open the preview window

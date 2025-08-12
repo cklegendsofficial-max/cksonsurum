@@ -70,10 +70,10 @@ topics = handler.get_topics_by_channel("CKDrive", geo="US")
 def process_channel_pipeline(channel_name: str, timeframe: str = None, geo: str = None):
     # Automatic niche resolution
     niche = niche_from_channel(channel_name)
-    
+
     # Get topics with resilient fallback
     topics = handler.get_topics_resilient(niche, timeframe=timeframe, geo=geo)
-    
+
     # Use topics in your pipeline logic
     return topics
 ```
@@ -84,7 +84,7 @@ def process_channel_pipeline(channel_name: str, timeframe: str = None, geo: str 
 def process_channel_pipeline(channel_name: str, timeframe: str = None, geo: str = None):
     # One-line topic retrieval with automatic niche resolution
     topics = handler.get_topics_by_channel(channel_name, timeframe=timeframe, geo=geo)
-    
+
     # Use topics in your pipeline logic
     return topics
 ```
@@ -94,12 +94,12 @@ def process_channel_pipeline(channel_name: str, timeframe: str = None, geo: str 
 ```python
 def process_multiple_channels(channels: list, timeframe: str = "today 1-m"):
     results = {}
-    
+
     for channel in channels:
         niche = niche_from_channel(channel)
         topics = handler.get_topics_by_channel(channel, timeframe=timeframe)
         results[channel] = {"niche": niche, "topics": topics}
-    
+
     return results
 
 # Usage

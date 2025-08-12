@@ -10,7 +10,7 @@ fonksiyonların iskeletini içerir.
 # import librosa
 # import numpy as np
 
-from typing import Dict, Any
+from typing import Any, Dict
 
 
 def score_video(video_file_path: str, metadata: Dict[str, Any]) -> float:
@@ -55,6 +55,3 @@ def score_video(video_file_path: str, metadata: Dict[str, Any]) -> float:
     # )
 
     # Şimdilik sadece iskelet: gerçek hesaplama yerine pass bırakıyoruz
-    pass
-
-

@@ -1,17 +1,67 @@
-# .env.example - Environment Variables Configuration
-# Copy this file to .env and fill in your actual API keys
+# env_example.txt - Environment Variables Configuration
+# Copy this file to .env and modify values as needed
 
-# Pexels API Configuration
-# Get your API key from: https://www.pexels.com/api/
-PEXELS_API_KEY=your_pexels_api_key_here
-
-# ElevenLabs API Configuration
-# Get your API key from: https://elevenlabs.io/
-ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
+# Output and Directory Settings
+OUTPUT_DIR=outputs
 
 # Ollama Configuration
-# Default Ollama server URL (change if using remote server)
-OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_URL=http://localhost:11434
+OLLAMA_MODEL=llama3:8b
 
-# PyTrends Proxy Configuration (optional)
-# PYTRENDS_PROXY=
+# Whisper Configuration
+WHISPER_MODEL=base
+
+# Rendering Settings
+ALLOW_SILENT_RENDER=True
+
+# Video Processing Settings
+FPS=30
+VIDEO_CODEC=libx264
+AUDIO_CODEC=aac
+BITRATE=6M
+
+# Language Tiers (comma-separated)
+LANGS_TIER1=en,es,pt,fr,de,ja
+LANGS_TIER2=tr,ar,hi,ru,it,nl,ko,zh
+
+# Random Seed
+SEED=42
+
+# API Keys (optional)
+PEXELS_API_KEY=your_pexels_api_key_here
+ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
+ELEVENLABS_VOICE_ID=your_elevenlabs_voice_id_here
+
+# Quality Standards
+MINIMUM_QUALITY_SCORE=0.7
+SCENE_VARIETY_THRESHOLD=0.6
+ENGAGEMENT_SCORE_THRESHOLD=0.75
+MINIMUM_DURATION_MINUTES=10
+TARGET_RESOLUTION=1920x1080
+
+# AI Configuration
+SELF_IMPROVEMENT_ENABLED=True
+CODE_GENERATION_ENABLED=True
+CONFIG_UPDATE_ENABLED=True
+QUALITY_ANALYSIS_ENABLED=True
+LEARNING_RATE=0.1
+MAX_ITERATIONS=5
+IMPROVEMENT_THRESHOLD=0.1
+
+# Self-Update Configuration
+SELF_UPDATE_ENABLED=True
+UPDATE_FREQUENCY=after_each_video
+
+# Pexels Configuration
+PEXELS_BASE_URL=https://api.pexels.com
+PEXELS_SEARCH_ENDPOINT=/videos/search
+PEXELS_REQUESTS_PER_HOUR=200
+PEXELS_REQUESTS_PER_DAY=5000
+
+# Geographic and Timeframe Settings (comma-separated)
+TIER1_GEOS=US,GB,CA,AU,DE,FR,IT,ES,NL,SE,NO,DK,CH
+TIER2_GEOS=BR,MX,IN,PL,TR,RU,ID,MY,TH,ZA
+DEFAULT_TIMEFRAMES=now 7-d,today 1-m,today 3-m
+
+# Maximum Topics
+MAX_TOPICS=24

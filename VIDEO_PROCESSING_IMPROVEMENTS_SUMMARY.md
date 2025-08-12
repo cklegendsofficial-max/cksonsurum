@@ -40,19 +40,19 @@ Successfully implemented real Pexels API integration, enhanced black frame detec
 ```python
 def _download_pexels_video(self, query: str, min_duration: float, target_path: str) -> Optional[str]:
     """Download video from Pexels using real API with retry mechanism and validation"""
-    
+
     # API headers with Bearer token
     headers = {
         "Authorization": f"Bearer {config.PEXELS_API_KEY}",
         "User-Agent": "EnhancedMasterDirector/2.0"
     }
-    
+
     # Search with retry mechanism
     response = self._make_pexels_request(search_url, params, headers)
-    
+
     # Select best video (highest quality, meets duration)
     best_video = self._select_best_pexels_video(videos, min_duration)
-    
+
     # Download with validation
     success = self._download_video_file(download_url, output_path, headers)
 ```
@@ -61,17 +61,17 @@ def _download_pexels_video(self, query: str, min_duration: float, target_path: s
 ```python
 def detect_black_frames(self, clip: VideoClip) -> Dict[str, Any]:
     """Enhanced black frame detection using luma percentile and stddev analysis"""
-    
+
     # BT.709 luma conversion for accurate brightness
     luma_frame = frame[:, :, 0] * 0.2126 + frame[:, :, 1] * 0.7152 + frame[:, :, 2] * 0.0722
-    
+
     # Calculate frame statistics
     frame_mean = np.mean(luma_frame)
     frame_std = np.std(luma_frame)
-    
+
     # Global percentile analysis
     global_p10 = np.percentile(all_means, 10)  # 10th percentile
-    
+
     # Adaptive thresholding
     is_black = (
         frame_mean < max(threshold_mean * 0.8, 20) and  # Adaptive threshold
@@ -84,11 +84,11 @@ def detect_black_frames(self, clip: VideoClip) -> Dict[str, Any]:
 ```python
 def extend_clip_to_duration(self, clip: VideoClip, target_duration: float) -> VideoClip:
     """Extend clip to target duration using smooth crossfade transitions"""
-    
+
     # Calculate loops needed
     loops_needed = int(target_duration / clip.duration) + 1
     crossfade_duration = 0.5  # 0.5 second crossfade
-    
+
     # Create extended clips with crossfade transitions
     for i in range(loops_needed):
         if i == 0:
@@ -96,10 +96,10 @@ def extend_clip_to_duration(self, clip: VideoClip, target_duration: float) -> Vi
         else:
             looped_clip = clip.crossfadein(crossfade_duration)  # Subsequent clips: crossfade in
             extended_clips.append(looped_clip)
-    
+
     # Concatenate with crossfade method
     final_clip = concatenate_videoclips(
-        extended_clips, 
+        extended_clips,
         method="compose",
         transition=lambda t: t  # Linear crossfade
     )
