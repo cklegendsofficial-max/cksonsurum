@@ -1,0 +1,17 @@
+# Captions System Requirements
+# Install with: pip install -r requirements_captions.txt
+
+# Core transcription
+openai-whisper>=20231117
+torch>=2.0.0
+
+# Translation models
+transformers>=4.30.0
+sentencepiece>=0.1.99
+
+# Audio processing (if not using system ffmpeg)
+ffmpeg-python>=0.2.0
+
+# Optional: Better audio quality
+librosa>=0.10.0
+numpy>=1.24.0

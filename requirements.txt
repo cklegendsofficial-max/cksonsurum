@@ -1,0 +1,23 @@
+# Enhanced Master Director - Video Pipeline Dependencies
+
+# Core dependencies
+tkinter  # Usually comes with Python
+Pillow>=9.0.0  # For image processing and video frame display
+numpy>=1.21.0  # For numerical operations and video analysis
+
+# Video processing
+moviepy>=1.0.3  # For video analysis and frame extraction
+
+# AI/LLM integration
+ollama>=0.1.0  # For AI-powered script regeneration
+
+# Configuration and environment
+python-dotenv>=1.0.0  # For environment variable management
+requests>=2.25.0  # For HTTP requests and API calls
+
+# Optional dependencies
+schedule>=1.1.0  # For automated scheduling
+pyautogui>=0.9.53  # For automation features
+
+# Development dependencies
+PyInstaller>=5.0  # For building executables

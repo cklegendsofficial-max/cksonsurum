@@ -1,0 +1,17 @@
+# .env.example - Environment Variables Configuration
+# Copy this file to .env and fill in your actual API keys
+
+# Pexels API Configuration
+# Get your API key from: https://www.pexels.com/api/
+PEXELS_API_KEY=your_pexels_api_key_here
+
+# ElevenLabs API Configuration
+# Get your API key from: https://elevenlabs.io/
+ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
+
+# Ollama Configuration
+# Default Ollama server URL (change if using remote server)
+OLLAMA_BASE_URL=http://localhost:11434
+
+# PyTrends Proxy Configuration (optional)
+# PYTRENDS_PROXY=
