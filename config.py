@@ -314,7 +314,24 @@ class Settings(BaseSettings):
         description="Seed topics for each niche",
     )
 
-    # Channel-specific configurations
+    # Centralized channel configuration
+    CHANNELS: Dict[str, Dict[str, str]] = Field(
+        default={
+            "CKLegends": {"niche": "history"},
+            "CKIronWill": {"niche": "motivation"},
+            "CKFinanceCore": {"niche": "finance"},
+            "CKDrive": {"niche": "automotive"},
+            "CKCombat": {"niche": "combat"},
+        },
+        description="Centralized channel configuration with niches",
+    )
+
+    DEFAULT_CHANNELS: List[str] = Field(
+        default=["CKLegends", "CKIronWill", "CKFinanceCore", "CKDrive", "CKCombat"],
+        description="Default list of available channels",
+    )
+
+    # Channel-specific configurations (extended)
     CHANNELS_CONFIG: Dict[str, Dict[str, Any]] = Field(
         default={
             "CKLegends": {
@@ -359,8 +376,71 @@ class Settings(BaseSettings):
                 "subtitle_languages": ["English", "Spanish", "French", "German"],
                 "quality_threshold": 0.85,
             },
+            "CKFinanceCore": {
+                "name": "CKFinanceCore",
+                "niche": "finance",
+                "niche_keywords": [
+                    "investment strategies",
+                    "market analysis",
+                    "financial planning",
+                    "wealth building",
+                    "economic trends",
+                ],
+                "self_improvement": True,
+                "self_update": True,
+                "target_duration_minutes": 15,
+                "style_preference": "professional",
+                "narrator_style": "morgan_freeman",
+                "music_style": "corporate_ambient",
+                "visual_style": "financial_charts",
+                "engagement_strategy": "data_insights",
+                "subtitle_languages": ["English", "Spanish", "French", "German"],
+                "quality_threshold": 0.8,
+            },
+            "CKDrive": {
+                "name": "CKDrive",
+                "niche": "automotive",
+                "niche_keywords": [
+                    "car reviews",
+                    "automotive technology",
+                    "racing",
+                    "classic cars",
+                    "car maintenance",
+                ],
+                "self_improvement": True,
+                "self_update": True,
+                "target_duration_minutes": 15,
+                "style_preference": "dynamic",
+                "narrator_style": "jeremy_clarkson",
+                "music_style": "energetic_rock",
+                "visual_style": "high_speed_action",
+                "engagement_strategy": "thrilling_sequences",
+                "subtitle_languages": ["English", "Spanish", "French", "German"],
+                "quality_threshold": 0.8,
+            },
+            "CKCombat": {
+                "name": "CKCombat",
+                "niche": "combat",
+                "niche_keywords": [
+                    "martial arts",
+                    "self defense",
+                    "combat sports",
+                    "military tactics",
+                    "weapon training",
+                ],
+                "self_improvement": True,
+                "self_update": True,
+                "target_duration_minutes": 12,
+                "style_preference": "intense",
+                "narrator_style": "morgan_freeman",
+                "music_style": "epic_battle",
+                "visual_style": "action_sequences",
+                "engagement_strategy": "adrenaline_rush",
+                "subtitle_languages": ["English", "Spanish", "French", "German"],
+                "quality_threshold": 0.85,
+            },
         },
-        description="Channel-specific configurations",
+        description="Extended channel-specific configurations",
     )
 
     @field_validator("UPDATE_FREQUENCY")

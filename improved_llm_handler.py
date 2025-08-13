@@ -1,6 +1,7 @@
 """Enhanced LLM Handler with robust JSON extraction and network resilience."""
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import wraps
 import hashlib
@@ -23,6 +24,119 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 # Import niche normalization and seed topics from config
 from config import normalize_niche, settings
+
+
+# JSON parsing utilities for robust LLM response handling
+@dataclass
+class VideoPlan:
+    video_title: str
+    target_duration_minutes: str  # örn "15-20"
+    word_count: int
+    script_sections: Dict[str, str]  # {"hook": "...", "body": "...", "outro": "..."}
+
+
+JSON_SCHEMA_HINT = {
+    "video_title": "string (concise, youtube-optimized)",
+    "target_duration_minutes": "string range like '12-15'",
+    "word_count": "integer 800-1400",
+    "script_sections": {
+        "hook": "80-120 words",
+        "body": "bullet-like paragraphs",
+        "outro": "30-60 words",
+    },
+}
+
+
+def _extract_json_block(text: str) -> str:
+    # 1) ```json ... ``` bloklarını tercih et
+    m = re.search(r"```json\s*(\{[\s\S]*?\})\s*```", text)
+    if not m:
+        # ilk { ile son } arasını al
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            candidate = text[start : end + 1]
+        else:
+            candidate = text
+    else:
+        candidate = m.group(1)
+    return candidate.strip()
+
+
+def _force_json(candidate: str) -> Dict[str, Any]:
+    s = candidate
+
+    # 2) naive onarım: 15-20 -> "15-20"
+    s = re.sub(r":\s*(\d+)\s*-\s*(\d+)\s*(,|})", r': "\1-\2"\3', s)
+
+    # 3) True/False -> true/false ; None -> null
+    s = re.sub(r"\bTrue\b", "true", s)
+    s = re.sub(r"\bFalse\b", "false", s)
+    s = re.sub(r"\bNone\b", "null", s)
+
+    # 4) sondaki virgülleri temizle
+    s = re.sub(r",\s*([}\]])", r"\1", s)
+
+    # 5) çift tırnaksız anahtar varsa düzelt (basit durumlar)
+    s = re.sub(r"(?m)^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:", r'\1"\2":', s)
+
+    return json.loads(s)
+
+    def _get_ollama_client(self):
+        """Get Ollama client wrapper for the new JSON parsing system"""
+
+        class OllamaClient:
+            def chat(self, prompt):
+                response = ollama.chat(
+                    model=settings.OLLAMA_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return type(
+                    "Response",
+                    (),
+                    {"text": response.get("message", {}).get("content", "")},
+                )()
+
+        return OllamaClient()
+
+    def _generate_video_plan_with_retry(self, niche: str, topic: str, llm) -> VideoPlan:
+        """Generate video plan using robust JSON parsing with retry logic"""
+        BASE_PROMPT = f"""
+You are a disciplined planner. Return ONLY minified JSON, no commentary, no markdown.
+
+STRICT SCHEMA (keys and types must match exactly):
+{json.dumps(JSON_SCHEMA_HINT)}
+
+Rules:
+- If you need ranges, use strings like "12-15" (never 12-15 without quotes)
+- Do not include code fences unless asked, but JSON is allowed in a ```json block too.
+- No trailing commas. No extra keys. English only.
+
+Now produce the object for niche="{niche}", topic="{topic}".
+"""
+        last_err = None
+        for attempt in range(1, 4):
+            resp = llm.chat(
+                BASE_PROMPT
+                if attempt == 1
+                else BASE_PROMPT + f"\nATTEMPT {attempt}: Ensure strict JSON."
+            )
+            raw = resp.text if hasattr(resp, "text") else str(resp)
+
+            try:
+                jtxt = _extract_json_block(raw)
+                data = _force_json(jtxt)
+                # minimal validation
+                assert isinstance(data.get("video_title"), str)
+                assert isinstance(data.get("target_duration_minutes"), str)
+                assert isinstance(data.get("word_count"), int)
+                assert isinstance(data.get("script_sections"), dict)
+                return VideoPlan(**data)
+            except Exception as e:
+                last_err = e
+                time.sleep(0.8)
+                continue
+        raise ValueError(f"LLM JSON parse failed after retries: {last_err}")
 
 
 # Pydantic models for topic scoring
@@ -505,9 +619,22 @@ class ImprovedLLMHandler:
             if not raw_text:
                 raise ValueError("Empty response from LLM")
 
+            # Try the existing extraction method first
             clean_json_text = self._extract_json_from_text(raw_text)
             if not clean_json_text:
-                raise ValueError("No valid JSON found in response")
+                # Fallback to the new robust parsing system
+                try:
+                    jtxt = _extract_json_block(raw_text)
+                    data = _force_json(jtxt)
+                    self.log_message(
+                        "JSON extracted using robust parsing fallback", "INFO"
+                    )
+                    return data
+                except Exception as e:
+                    self.log_message(
+                        f"Robust parsing fallback also failed: {e}", "ERROR"
+                    )
+                    raise ValueError("No valid JSON found in response")
 
             parsed_json = json.loads(clean_json_text)
             self.log_message("LLM response successfully parsed", "INFO")
@@ -1412,46 +1539,122 @@ Focus on creating genuine suspense and curiosity. Each section should advance th
 
 CRITICAL: Return ONLY valid JSON. Do not include any explanatory text, markdown formatting, or additional content outside the JSON structure."""
 
-            result = self._get_ollama_response(prompt)
-            if result and "script_structure" in result:
-                # Calculate total word count
-                total_words = 0
-                if "hook" in result["script_structure"]:
-                    total_words += len(
-                        result["script_structure"]["hook"]["content"].split()
-                    )
-                if "promise" in result["script_structure"]:
-                    total_words += len(
-                        result["script_structure"]["promise"]["content"].split()
-                    )
-                if "proof" in result["script_structure"]:
-                    total_words += len(
-                        result["script_structure"]["proof"]["content"].split()
-                    )
-                if "preview" in result["script_structure"]:
-                    total_words += len(
-                        result["script_structure"]["preview"]["content"].split()
-                    )
+            # Use the new robust JSON parsing system
+            try:
+                # First, try to get a video plan using the new system
+                video_plan = self._generate_video_plan_with_retry(
+                    niche=niche,
+                    topic=video_idea.get("title", "N/A"),
+                    llm=self._get_ollama_client(),
+                )
 
-                # Update word count in result
-                result["word_count"] = total_words
+                # Convert VideoPlan to the expected script format
+                result = {
+                    "video_title": video_plan.video_title,
+                    "target_duration_minutes": video_plan.target_duration_minutes,
+                    "word_count": video_plan.word_count,
+                    "script_structure": {
+                        "hook": {
+                            "content": video_plan.script_sections.get("hook", ""),
+                            "visual_query": f"cinematic 4K {niche} scene with dramatic lighting",
+                            "timing_seconds": 0,
+                            "engagement_hook": "Shocking opening statement or question",
+                        },
+                        "promise": {
+                            "content": video_plan.script_sections.get("body", ""),
+                            "visual_query": f"cinematic 4K {niche} scene building anticipation",
+                            "timing_seconds": 8,
+                            "engagement_hook": "Building curiosity and expectation",
+                        },
+                        "proof": {
+                            "content": video_plan.script_sections.get("body", ""),
+                            "visual_query": f"cinematic 4K {niche} scene authoritative mood",
+                            "timing_seconds": 16,
+                            "engagement_hook": "Establishing trust and expertise",
+                        },
+                        "preview": {
+                            "content": video_plan.script_sections.get("outro", ""),
+                            "visual_query": f"cinematic 4K {niche} scene mysterious atmosphere",
+                            "timing_seconds": 24,
+                            "engagement_hook": "Creating anticipation for next section",
+                        },
+                    },
+                    "metadata": {
+                        "subtitle_languages": [
+                            "English",
+                            "Spanish",
+                            "French",
+                            "German",
+                        ],
+                        "target_audience": "Global English-speaking viewers",
+                        "engagement_strategy": "Hook → Promise → Proof → Preview structure with cliffhangers",
+                        "visual_prevention": f"Exact niche matching for '{niche}' to prevent irrelevant visuals",
+                    },
+                }
 
                 self.log_message(
-                    f"Generated script with {total_words} words using Hook→Promise→Proof→Preview structure for '{video_idea.get('title', 'N/A')}'",
+                    f"Generated script with {video_plan.word_count} words using robust JSON parsing for '{video_idea.get('title', 'N/A')}'",
                     "INFO",
                 )
 
                 # Validate word count
-                if total_words < 80 or total_words > 120:
+                if video_plan.word_count < 800 or video_plan.word_count > 1400:
                     self.log_message(
-                        f"Warning: Script has {total_words} words (target: 80-120 words)",
+                        f"Warning: Script has {video_plan.word_count} words (target: 800-1400 words)",
                         "WARNING",
                     )
 
                 return result
-            else:
-                self.log_message("Failed to generate script", "ERROR")
-                return None
+
+            except Exception as e:
+                self.log_message(
+                    f"Robust JSON parsing failed, falling back to old method: {e}",
+                    "WARNING",
+                )
+
+                # Fallback to old method
+                result = self._get_ollama_response(prompt)
+                if result and "script_structure" in result:
+                    # Calculate total word count
+                    total_words = 0
+                    if "hook" in result["script_structure"]:
+                        total_words += len(
+                            result["script_structure"]["hook"]["content"].split()
+                        )
+                    if "promise" in result["script_structure"]:
+                        total_words += len(
+                            result["script_structure"]["promise"]["content"].split()
+                        )
+                    if "proof" in result["script_structure"]:
+                        total_words += len(
+                            result["script_structure"]["proof"]["content"].split()
+                        )
+                    if "preview" in result["script_structure"]:
+                        total_words += len(
+                            result["script_structure"]["preview"]["content"].split()
+                        )
+
+                    # Update word count in result
+                    result["word_count"] = total_words
+
+                    self.log_message(
+                        f"Fallback: Generated script with {total_words} words using Hook→Promise→Proof→Preview structure for '{video_idea.get('title', 'N/A')}'",
+                        "INFO",
+                    )
+
+                    # Validate word count
+                    if total_words < 80 or total_words > 120:
+                        self.log_message(
+                            f"Warning: Script has {total_words} words (target: 80-120 words)",
+                            "WARNING",
+                        )
+
+                    return result
+                else:
+                    self.log_message(
+                        "Failed to generate script with both methods", "ERROR"
+                    )
+                    return None
 
         except Exception as e:
             self.log_message(f"Error in write_script: {e}", "ERROR")
@@ -1598,6 +1801,62 @@ Return in JSON format:
         except Exception as e:
             self.log_message(f"Error generating extra sentences: {e}", "ERROR")
             return []
+
+    def _get_ollama_client(self):
+        """Get Ollama client wrapper for the new JSON parsing system"""
+
+        class OllamaClient:
+            def chat(self, prompt):
+                response = ollama.chat(
+                    model=settings.OLLAMA_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return type(
+                    "Response",
+                    (),
+                    {"text": response.get("message", {}).get("content", "")},
+                )()
+
+        return OllamaClient()
+
+    def _generate_video_plan_with_retry(self, niche: str, topic: str, llm) -> VideoPlan:
+        """Generate video plan using robust JSON parsing with retry logic"""
+        BASE_PROMPT = f"""
+You are a disciplined planner. Return ONLY minified JSON, no commentary, no markdown.
+
+STRICT SCHEMA (keys and types must match exactly):
+{json.dumps(JSON_SCHEMA_HINT)}
+
+Rules:
+- If you need ranges, use strings like "12-15" (never 12-15 without quotes)
+- Do not include code fences unless asked, but JSON is allowed in a ```json block too.
+- No trailing commas. No extra keys. English only.
+
+Now produce the object for niche="{niche}", topic="{topic}".
+"""
+        last_err = None
+        for attempt in range(1, 4):
+            resp = llm.chat(
+                BASE_PROMPT
+                if attempt == 1
+                else BASE_PROMPT + f"\nATTEMPT {attempt}: Ensure strict JSON."
+            )
+            raw = resp.text if hasattr(resp, "text") else str(resp)
+
+            try:
+                jtxt = _extract_json_block(raw)
+                data = _force_json(jtxt)
+                # minimal validation
+                assert isinstance(data.get("video_title"), str)
+                assert isinstance(data.get("target_duration_minutes"), str)
+                assert isinstance(data.get("word_count"), int)
+                assert isinstance(data.get("script_sections"), dict)
+                return VideoPlan(**data)
+            except Exception as e:
+                last_err = e
+                time.sleep(0.8)
+                continue
+        raise ValueError(f"LLM JSON parse failed after retries: {last_err}")
 
 
 # Convenience functions for backward compatibility

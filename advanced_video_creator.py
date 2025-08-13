@@ -1,13 +1,221 @@
 # content_pipeline/advanced_video_creator.py (Professional Master Director Edition)
 
+from dataclasses import dataclass
 import json
 import os
 import random
 import time
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+
+# Type hints only - for IDE support
+if TYPE_CHECKING:
+    from moviepy.editor import VideoClip
+
+from pathlib import Path
+
+import imageio_ffmpeg
 import numpy as np
 import requests
+
+
+@dataclass
+class RenderResult:
+    status: str  # "success" | "skipped" | "failed"
+    reason: Optional[str]
+    output_path: Optional[str]
+    used_ffmpeg: Optional[str]
+    silent_render: bool
+    duration_sec: Optional[float]
+    params: Dict[str, Any]
+
+
+def _ensure_ffmpeg_path() -> str:
+    """
+    Returns a valid ffmpeg executable path. Prefer system ffmpeg if found by imageio-ffmpeg,
+    otherwise use the bundled binary path.
+    """
+    try:
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        # imageio-ffmpeg already bundles an ffmpeg. If this raises, re-raise for clarity.
+        raise RuntimeError("FFmpeg not available from imageio-ffmpeg.")
+
+
+def render_video(assets: Dict[str, Any], out_dir: Path, cfg, logger) -> RenderResult:
+    """
+    assets: {'clips': List[VideoFileClip or path], 'audio': optional path or AudioFileClip, 'title': str, ...}
+    - VO/audio yoksa sessiz render'a izin ver (cfg.ALLOW_SILENT_RENDER).
+    - Tüm çıktılar out_dir'e yazılır. Geçici dosya tmp_final.mp4 -> final_video.mp4
+    """
+    # Lazy import
+    try:
+        from moviepy.editor import AudioFileClip, VideoFileClip, concatenate_videoclips
+    except Exception as e:
+        logger.warning(f"[AdvancedVideoCreator] MoviePy not available: {e}")
+        return RenderResult(
+            status="skipped",
+            reason="moviepy-missing",
+            output_path=None,
+            used_ffmpeg=None,
+            silent_render=False,
+            duration_sec=None,
+            params={},
+        )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    final_path = out_dir / "final_video.mp4"
+    tmp_path = out_dir / "tmp_final.mp4"
+
+    # 1) ffmpeg yolu
+    try:
+        ffmpeg_path = _ensure_ffmpeg_path()
+        logger.info(f"[AdvancedVideoCreator] Using ffmpeg: {ffmpeg_path}")
+    except Exception as e:
+        return RenderResult(
+            status="failed",
+            reason=str(e),
+            output_path=None,
+            used_ffmpeg=None,
+            silent_render=False,
+            duration_sec=None,
+            params={},
+        )
+
+    # 2) klipleri hazırla
+    try:
+        clips: List[VideoFileClip] = []
+        for c in assets.get("clips", []):
+            if isinstance(c, VideoFileClip):
+                clips.append(c)
+            else:
+                clips.append(VideoFileClip(str(c)))
+        if not clips:
+            return RenderResult(
+                status="skipped",
+                reason="no clips",
+                output_path=None,
+                used_ffmpeg=ffmpeg_path,
+                silent_render=False,
+                duration_sec=None,
+                params={},
+            )
+        video = concatenate_videoclips(clips, method="compose")
+        duration_sec = float(video.duration or 0.0)
+    except Exception as e:
+        # kaynağı kapat
+        for cl in locals().get("clips", []):
+            try:
+                cl.close()
+            except:
+                pass
+        return RenderResult(
+            status="failed",
+            reason=f"clip build: {e}",
+            output_path=None,
+            used_ffmpeg=ffmpeg_path,
+            silent_render=False,
+            duration_sec=None,
+            params={},
+        )
+
+    # 3) ses/VO ekle (opsiyonel)
+    silent = False
+    try:
+        audio_src = assets.get("audio")
+        if audio_src:
+            if isinstance(audio_src, AudioFileClip):
+                video = video.set_audio(audio_src)
+            else:
+                aclip = AudioFileClip(str(audio_src))
+                video = video.set_audio(aclip)
+        else:
+            if getattr(cfg, "ALLOW_SILENT_RENDER", True):
+                logger.warning(
+                    "[AdvancedVideoCreator] voiceover missing -> silent render"
+                )
+                silent = True
+            else:
+                try:
+                    video.close()
+                except:
+                    pass
+                return RenderResult(
+                    status="failed",
+                    reason="no audio and silent disabled",
+                    output_path=None,
+                    used_ffmpeg=ffmpeg_path,
+                    silent_render=False,
+                    duration_sec=duration_sec,
+                    params={},
+                )
+    except Exception as e:
+        logger.warning(
+            f"[AdvancedVideoCreator] audio attach failed -> continue silent ({e})"
+        )
+        silent = True
+
+    # 4) yazma parametreleri
+    params = dict(
+        fps=getattr(cfg, "FPS", 30),
+        codec=getattr(cfg, "VIDEO_CODEC", "libx264"),
+        audio_codec=getattr(cfg, "AUDIO_CODEC", "aac"),
+        bitrate=getattr(cfg, "BITRATE", "6M"),
+        ffmpeg_params=["-fflags", "+genpts"],  # zaman bazlı küçük tutarlılık
+        temp_audiofile=str(out_dir / "temp-audio.m4a"),
+        remove_temp=True,
+        verbose=False,
+        progress_bar=False,  # MoviePy ilerleme çubuğunu kapat
+        threads=0,  # ffmpeg auto-threads
+    )
+
+    # 5) yaz ve atomik rename
+    try:
+        # MoviePy global ffmpeg seçimini imageio-ffmpeg zaten yönetir (PATH'e ihtiyaç yok).
+        logger.info(
+            f"[AdvancedVideoCreator] Writing video -> {tmp_path.name} (fps={params['fps']}, codec={params['codec']})"
+        )
+        video.write_videofile(str(tmp_path), **params)
+        # atomik rename
+        if final_path.exists():
+            final_path.unlink()
+        tmp_path.replace(final_path)
+        return RenderResult(
+            status="success",
+            reason=None,
+            output_path=str(final_path),
+            used_ffmpeg=ffmpeg_path,
+            silent_render=silent,
+            duration_sec=duration_sec,
+            params=params,
+        )
+    except Exception as e:
+        # tmp dosyayı temizle
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except:
+            pass
+        return RenderResult(
+            status="failed",
+            reason=f"write_videofile: {e}",
+            output_path=None,
+            used_ffmpeg=ffmpeg_path,
+            silent_render=silent,
+            duration_sec=duration_sec,
+            params={},
+        )
+    finally:
+        # kaynakları kapat
+        try:
+            video.close()
+        except:
+            pass
+        for cl in locals().get("clips", []):
+            try:
+                cl.close()
+            except:
+                pass
 
 
 # --- config imports & defaults ---
@@ -71,9 +279,6 @@ try:
     GTTS_AVAILABLE = True
 except ImportError:
     GTTS_AVAILABLE = False
-
-from moviepy.editor import *
-from moviepy.video.fx import all as vfx
 
 
 class AdvancedVideoCreator:
@@ -565,8 +770,15 @@ class AdvancedVideoCreator:
 
     def _create_enhanced_visual_clip(
         self, visual_path: str, duration: float, scene_index: int
-    ) -> VideoClip:
+    ) -> "VideoClip":
         """Create enhanced visual clip with black frame detection and fallback"""
+        # Lazy import
+        try:
+            from moviepy.editor import VideoFileClip
+        except Exception as e:
+            self.log_message(f"❌ MoviePy not available: {e}", "ERROR")
+            return self._create_fallback_visual_clip(duration, scene_index)
+
         try:
             if not visual_path or not os.path.exists(visual_path):
                 # Create fallback visual clip
@@ -603,7 +815,7 @@ class AdvancedVideoCreator:
             self.log_message(f"⚠️ Enhanced visual clip creation failed: {e}", "WARNING")
             return self._create_fallback_visual_clip(duration, scene_index)
 
-    def detect_black_frames(self, clip: VideoClip) -> Dict[str, Any]:
+    def detect_black_frames(self, clip: "VideoClip") -> Dict[str, Any]:
         """
         Enhanced black frame detection using luma percentile and stddev analysis
 
@@ -744,8 +956,16 @@ class AdvancedVideoCreator:
 
     def _create_fallback_visual_clip(
         self, duration: float, scene_index: int
-    ) -> VideoClip:
+    ) -> "VideoClip":
         """Create fallback visual clip when original fails"""
+        # Lazy import
+        try:
+            from moviepy.editor import ColorClip, ImageClip
+        except Exception as e:
+            self.log_message(f"❌ MoviePy not available: {e}", "ERROR")
+            # Return None, caller should handle
+            return None
+
         try:
             # Create a simple colored background with text
             from PIL import Image, ImageDraw, ImageFont
@@ -795,8 +1015,8 @@ class AdvancedVideoCreator:
             )
 
     def extend_clip_to_duration(
-        self, clip: VideoClip, target_duration: float
-    ) -> VideoClip:
+        self, clip: "VideoClip", target_duration: float
+    ) -> "VideoClip":
         """
         Extend clip to target duration using smooth crossfade transitions
 
@@ -807,6 +1027,13 @@ class AdvancedVideoCreator:
         Returns:
             VideoClip: Extended clip with smooth transitions
         """
+        # Lazy import
+        try:
+            from moviepy.editor import concatenate_videoclips
+        except Exception as e:
+            self.log_message(f"❌ MoviePy not available: {e}", "ERROR")
+            return clip  # Return original clip if MoviePy not available
+
         try:
             if clip.duration >= target_duration:
                 return clip
@@ -860,8 +1087,8 @@ class AdvancedVideoCreator:
             return self._extend_clip_simple_fallback(clip, target_duration)
 
     def _extend_clip_simple_fallback(
-        self, clip: VideoClip, target_duration: float
-    ) -> VideoClip:
+        self, clip: "VideoClip", target_duration: float
+    ) -> "VideoClip":
         """Simple fallback extension method without crossfade"""
         try:
             loops_needed = int(target_duration / clip.duration) + 1
@@ -875,8 +1102,8 @@ class AdvancedVideoCreator:
             return clip
 
     def _extend_with_ollama_content(
-        self, clip: VideoClip, target_duration: float
-    ) -> Optional[VideoClip]:
+        self, clip: "VideoClip", target_duration: float
+    ) -> Optional["VideoClip"]:
         """Extend clip duration using Ollama-generated additional content"""
         try:
             import ollama
@@ -922,9 +1149,16 @@ class AdvancedVideoCreator:
             return None
 
     def _apply_professional_effects(
-        self, clip: VideoClip, scene_index: int
-    ) -> VideoClip:
+        self, clip: "VideoClip", scene_index: int
+    ) -> "VideoClip":
         """Apply professional visual effects to enhance quality"""
+        # Lazy import
+        try:
+            from moviepy.video.fx import all as vfx
+        except Exception as e:
+            self.log_message(f"❌ MoviePy vfx not available: {e}", "ERROR")
+            return clip  # Return original clip if vfx not available
+
         try:
             # Add subtle zoom effect
             clip = clip.resize(lambda t: 1 + 0.05 * t / clip.duration)
@@ -943,8 +1177,15 @@ class AdvancedVideoCreator:
 
     def _create_subliminal_message(
         self, message: str, duration: float
-    ) -> Optional[VideoClip]:
+    ) -> Optional["VideoClip"]:
         """Create subliminal message clip"""
+        # Lazy import
+        try:
+            from moviepy.editor import TextClip
+        except Exception as e:
+            self.log_message(f"❌ MoviePy not available: {e}", "ERROR")
+            return None
+
         try:
             # Create very brief text clip
             text_clip = TextClip(message, fontsize=40, color="white", bg_color="black")
@@ -959,8 +1200,19 @@ class AdvancedVideoCreator:
             self.log_message(f"⚠️ Subliminal message creation failed: {e}", "WARNING")
             return None
 
-    def _add_background_music(self, video: VideoClip, music_path: str) -> VideoClip:
+    def _add_background_music(self, video: "VideoClip", music_path: str) -> "VideoClip":
         """Add background music to video"""
+        # Lazy import
+        try:
+            from moviepy.editor import (
+                AudioFileClip,
+                CompositeAudioClip,
+                concatenate_audioclips,
+            )
+        except Exception as e:
+            self.log_message(f"❌ MoviePy not available: {e}", "ERROR")
+            return video
+
         try:
             if not os.path.exists(music_path):
                 return video
@@ -988,7 +1240,7 @@ class AdvancedVideoCreator:
             self.log_message(f"⚠️ Background music addition failed: {e}", "WARNING")
             return video
 
-    def _add_multilingual_subtitles(self, video: VideoClip) -> VideoClip:
+    def _add_multilingual_subtitles(self, video: "VideoClip") -> "VideoClip":
         """Add multilingual subtitles"""
         try:
             # Placeholder for multilingual subtitle implementation
@@ -1000,9 +1252,16 @@ class AdvancedVideoCreator:
             return video
 
     def _extend_video_duration(
-        self, video: VideoClip, target_duration: float
-    ) -> VideoClip:
+        self, video: "VideoClip", target_duration: float
+    ) -> "VideoClip":
         """Extend video duration to meet minimum requirements"""
+        # Lazy import
+        try:
+            from moviepy.editor import concatenate_videoclips
+        except Exception as e:
+            self.log_message(f"❌ MoviePy not available: {e}", "ERROR")
+            return video
+
         try:
             if video.duration >= target_duration:
                 return video
@@ -1025,6 +1284,13 @@ class AdvancedVideoCreator:
 
     def _analyze_video_quality(self, video_path: str) -> Dict[str, Any]:
         """Analyze video quality using MoviePy and numpy for real metrics"""
+        # Lazy import
+        try:
+            from moviepy.editor import VideoFileClip
+        except Exception as e:
+            self.log_message(f"❌ MoviePy not available: {e}", "ERROR")
+            return {"error": "MoviePy not available"}
+
         try:
             if not os.path.exists(video_path):
                 return {"error": "Video file not found"}
@@ -1085,7 +1351,7 @@ class AdvancedVideoCreator:
             self.log_message(f"❌ Video quality analysis failed: {e}", "ERROR")
             return {"error": str(e)}
 
-    def _analyze_visual_variety(self, clip: VideoClip) -> float:
+    def _analyze_visual_variety(self, clip: "VideoClip") -> float:
         """Analyze visual variety using numpy frame differences"""
         try:
             import numpy as np
@@ -1124,7 +1390,7 @@ class AdvancedVideoCreator:
             self.log_message(f"⚠️ Visual variety analysis failed: {e}", "WARNING")
             return 0.5
 
-    def _analyze_audio_quality(self, clip: VideoClip) -> float:
+    def _analyze_audio_quality(self, clip: "VideoClip") -> float:
         """Analyze audio quality"""
         try:
             if not clip.audio:
@@ -1181,8 +1447,16 @@ class AdvancedVideoCreator:
         except Exception as e:
             self.log_message(f"⚠️ Ollama function regeneration failed: {e}", "WARNING")
 
-    def _create_hook_clip(self, hook_text: str, duration: float) -> VideoClip:
+    def _create_hook_clip(self, hook_text: str, duration: float) -> "VideoClip":
         """Create hook clip for short videos"""
+        # Lazy import
+        try:
+            from moviepy.editor import ColorClip, TextClip
+        except Exception as e:
+            self.log_message(f"❌ MoviePy not available: {e}", "ERROR")
+            # Fallback: return None, caller should handle
+            return None
+
         try:
             # Create hook text clip
             text_clip = TextClip(hook_text, fontsize=50, color="white", bg_color="red")
@@ -1489,6 +1763,13 @@ class AdvancedVideoCreator:
         output_filename: str,
     ) -> Optional[str]:
         """Create advanced long-form video with MoviePy + imageio-ffmpeg robust rendering"""
+        # Lazy import
+        try:
+            from moviepy.editor import AudioFileClip, concatenate_videoclips
+        except Exception as e:
+            self.log_message(f"❌ MoviePy not available: {e}", "ERROR")
+            return None
+
         self.log_message(
             "🎬 Creating advanced long-form video with robust rendering...", "VIDEO"
         )
@@ -1711,6 +1992,13 @@ class AdvancedVideoCreator:
         self, long_form_video_path: str, output_folder: str
     ) -> List[str]:
         """Create 3 short videos (15-60 seconds) from long form video"""
+        # Lazy import
+        try:
+            from moviepy.editor import VideoFileClip, concatenate_videoclips
+        except Exception as e:
+            self.log_message(f"❌ MoviePy not available: {e}", "ERROR")
+            return []
+
         self.log_message("🎬 Creating short videos from long form content...", "SHORTS")
 
         try:
